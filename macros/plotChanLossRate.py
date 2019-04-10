@@ -99,7 +99,7 @@ Optional Arguments
 
 .. option:: -p, --percentage
 
-    Plotted channel loss data is presented as a percentage of the total number of channels in 
+    Plotted channel loss data is presented as a fraction of the total number of channels in 
     a detector instead of the raw channel number.
 
 .. option:: -n, --noLeg
@@ -136,14 +136,16 @@ To make a cummulative channel loss plot execute:
 
     plotChanLossRate.py -c ChanLoss_AllDet.txt
 
-To make an instantaneous channel loss in percentage execute:
+To make an instantaneous channel loss in fraction execute:
 
     plotChanLossRate.py -p ChanLoss_AllDet.txt
 
-To make a cummulative percentage channel loss plot execute:
+To make a cummulative fraction channel loss plot execute:
 
     plotChanLossRate.py -c -p ChanLoss_AllDet.txt
 """
+    
+import ROOT as r
 
 def getDateFromStr(strDate,strFormat="YYYY.MM.DD.hh.mm"):
     """
@@ -242,9 +244,8 @@ def getChanLossPlot(args, chamberName, infilename, startingTime):
     # Check infilename input file
     try:
         infilename = open(infilename, 'r')  
-    except Exception as e:
+    except IOError:
         print( '%s does not seem to exist or is not readable'%(infilename) )
-        print( e )
         exit(os.EX_NOINPUT)
         pass
 
@@ -312,10 +313,11 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Makes a time series plot")
     parser.add_argument("fileChanLoss",type=str,help="physical filename specifying channel loss data")
     parser.add_argument("-f","--fileObsData",type=str,help="If provided plots the data contained here on a secondary y-axis on top of the channel loss data. Format should be a delimited file (matching 'delimiter'), first line should be a column header.  Subsequent lines are delimited datetime then observable data.  Datetime is expected to be in format 'YYYY.MM.DD hh:mm:ss'.")
+    parser.add_argument("--fileLHCSchedule",type=str,help="If provided will draw boxes on the output plot indicating the LHC schedule.  Format should be a delimited file (matching 'delimiter'), first line should be column header.  Subsequent lines are delimited entires; each entry is structured as: starting datetime, ending datetime, description.  Here Datetime is expected to be in format matching 'YYYY.MM.DD'")
     parser.add_argument("-c","--cummulative",action="store_true",help="If provided a cummulative channel loss plot is made instead of an instantaneous loss plots",default=None)
     parser.add_argument("-d","--delimiter",type=str,help="delimiter in fileChanLoss file",default=",")
     parser.add_argument("--debug",action="store_true",help="print additional debugging info")
-    parser.add_argument("-p","--percentage",action="store_true",help="provide output data as a percentage of the total number of channels in a detector")
+    parser.add_argument("-p","--percentage",action="store_true",help="provide output data as a fraction of the total number of channels in a detector")
     parser.add_argument("--logy1",action="store_true",help="primary y-axis is logarithmic")
     parser.add_argument("--logy2",action="store_true",help="secondary y-axis is logarithmic")
     parser.add_argument("-n","--noLeg",action="store_true",help="Do not draw TLegend")
@@ -336,9 +338,8 @@ if __name__ == "__main__":
         try:
             with open(args.fileObsData) as fileObsData:
                 obsDataList = fileObsData.readlines()
-        except Exception as e:
+        except IOError:
             print( '%s does not seem to exist or is not readable'%(fileObsData) )
-            print( e )
             exit(os.EX_NOINPUT)
             pass
         
@@ -394,7 +395,6 @@ if __name__ == "__main__":
         array_time[0] = 0 
         array_time[1] = (endingTime - startingTime).total_seconds()
     
-    import ROOT as r
     rootOffsetTime = r.TDatime(
             startingTime.year, 
             startingTime.month, 
@@ -404,10 +404,15 @@ if __name__ == "__main__":
             startingTime.second)
     
     # Open input file
-    with open(args.fileChanLoss, 'r') as fileList:
-        listOfChanLost = fileList.readlines()
+    try:
+        with open(args.fileChanLoss, 'r') as fileList:
+            listOfChanLost = fileList.readlines()
+            pass
+    except IOError:
+        print( '%s does not seem to exist or is not readable'%(args.fileChanLoss) )
+        exit(os.EX_NOINPUT)
         pass
-    listOfChanLost = [ line.strip('\n') for line in listOfChanLost ]
+    #listOfChanLost = [ line.strip('\n') for line in listOfChanLost ]
     
     # Loop Over Inputs
     dict_chanLoss = {}
@@ -430,7 +435,7 @@ if __name__ == "__main__":
         if args.cummulative:
             cName+="_cum"
         if args.percentage:
-            cName+="_percent"
+            cName+="_fraction"
             pass
 
         # Get this plot
@@ -454,7 +459,7 @@ if __name__ == "__main__":
     yAxisLabel = "Channel Loss"
     if args.percentage:
         maxChanLoss = 1.
-        yAxisLabel = "Percent {0}".format(yAxisLabel)
+        yAxisLabel = "Fraction {0}".format(yAxisLabel)
     elif args.cummulative:
         yAxisLabel = "Cummulative {0}".format(yAxisLabel)
         pass
@@ -470,7 +475,7 @@ if __name__ == "__main__":
     if args.cummulative:
         canvName += "_cum"
     if args.percentage:
-        canvName += "_percent"
+        canvName += "_fraction"
 
     # Make a canvas
     canvData = r.TCanvas("canv_chanLoss_{0}".format(canvName),"Channels Lost - {0}".format(canvName),700,700)
@@ -510,12 +515,10 @@ if __name__ == "__main__":
                 array_obsData)
         g_obsData.GetXaxis().SetTimeDisplay(1)
         g_obsData.GetXaxis().SetTimeOffset(rootOffsetTime.Convert())
-        #g_obsData.GetXaxis().SetTitle(obsName)
         g_obsData.SetMarkerStyle(22)
         g_obsData.SetMarkerColor(r.kBlack)
         g_obsData.SetLineWidth(2)
         g_obsData.SetLineColor(r.kBlack)
-        #g_obsData.Draw("LP")
         g_obsData.Draw("P")
         leg.AddEntry(g_obsData,obsName,"LPE")
         
@@ -544,9 +547,95 @@ if __name__ == "__main__":
         plot.Draw("samePE1")
         pass
 
+    # Draw LHC schedule?
+    if args.fileLHCSchedule is not None:
+        # Check infilename input file
+        try:
+            with open(args.fileLHCSchedule) as infile:
+                scheduleDataList = infile.readlines()
+        except IOError:
+            print( '%s does not seem to exist or is not readable'%(args.fileLHCSchedule) )
+            exit(os.EX_NOINPUT)
+            pass
+
+        # Initialize the plots that will be created
+        knownKeywords = [
+                "MD",
+                "Other",
+                "YETS",
+                "TS"
+                ]
+        colorMapByKeyword = {
+                "MD":r.kBlue-8,
+                "Other":r.kOrange-8,
+                "YETS":r.kGreen-2,
+                "TS":r.kGreen-8
+            }
+        dict_graphSchedules = {}
+        for keyword in knownKeywords:
+            dict_graphSchedules[keyword] = r.TGraphErrors()
+            dict_graphSchedules[keyword].SetName("lhcSchedule_{0}".format(keyword))
+            dict_graphSchedules[keyword].SetFillColor(colorMapByKeyword[keyword])
+            dict_graphSchedules[keyword].SetFillStyle(3001)
+            dict_graphSchedules[keyword].SetLineColor(colorMapByKeyword[keyword])
+            dict_graphSchedules[keyword].SetMarkerColor(colorMapByKeyword[keyword])
+            dict_graphSchedules[keyword].GetXaxis().SetTimeDisplay(1)
+            dict_graphSchedules[keyword].GetXaxis().SetTimeOffset(rootOffsetTime.Convert())
+            pass
+
+        dict_descriptions = {} # key will be an x-point, value will be a description
+        for idx,line in enumerate(scheduleDataList):
+            if line[0] == "#": # allow for comments
+                continue
+            
+            # Split the line
+            line = line.strip('\n') # remove trailing new line characters
+            dataEntry = line.rsplit(args.delimiter) # gives a list of strings
+
+            # Handle column header
+            if idx == 0:
+                continue # move to next line
+
+            # Load Data
+            evtTimeRangeInit = getDateFromStr(dataEntry[0],strFormat="YYYY.MM.DD")
+            evtTimeRangeFinal= getDateFromStr(dataEntry[1],strFormat="YYYY.MM.DD")
+
+            evtTime = 0.5 * (evtTimeRangeFinal - evtTimeRangeInit).total_seconds() + (evtTimeRangeInit - startingTime).total_seconds()
+
+            thisDescription = dataEntry[2]
+
+            # Determine keyword type
+            thisKey = None
+            for keyword in knownKeywords:
+                if keyword in thisDescription:
+                    thisKey = keyword
+                    break
+                pass
+            if thisKey is None:
+                thisKey = "Other"
+                pass
+
+            # Store the description
+            dict_descriptions[evtTime]=thisDescription
+
+            # Add the point to the plot
+            dict_graphSchedules[thisKey].SetPoint(
+                    dict_graphSchedules[thisKey].GetN(),
+                    evtTime,
+                    0.5)
+            dict_graphSchedules[thisKey].SetPointError(
+                    dict_graphSchedules[thisKey].GetN()-1,
+                    abs( 0.5*(evtTimeRangeFinal - evtTimeRangeInit).total_seconds() ),
+                    1)
+            pass
+        
+        for keyword,plot in dict_graphSchedules.iteritems():
+            plot.Draw("samePF2")
+
+    # Draw Legend?
     if not args.noLeg:
         leg.Draw("same")
-        
+
     # Store output
     outputFile = r.TFile("out_{0}.root".format(canvName),"RECREATE")
     outputFile.cd()
@@ -555,6 +644,11 @@ if __name__ == "__main__":
     if args.fileObsData is not None:
         g_obsData.SetName("g_{0}".format(obsNameNoSpecials))
         g_obsData.Write()
+        pass
+    if args.fileLHCSchedule is not None:
+        for keyword,plot in dict_graphSchedules.iteritems():
+            plot.Write()
+            pass
         pass
     canvData.Write()
 
