@@ -10,6 +10,7 @@ Documentation
 -------------
 """
 
+#FIXME evetually remove the parser from OptionParser
 from optparse import OptionParser
 
 parser = OptionParser()
@@ -33,3 +34,19 @@ parser.add_option("-t", "--type", type="string", dest="GEBtype", default="long",
                   help="Specify GEB (long/short)", metavar="GEBtype")
 parser.add_option("--ztrim", type="float", dest="ztrim", default=4.0,
                   help="Specify the p value of the trim", metavar="ztrim")
+
+import argparse
+parent_parser = argparse.ArgumentParser(add_help = False)
+
+# Positional arguments
+parent_parser.add_argument("infilename",type=str,help="Specify Input Filename by full path")
+parent_parser.add_argument("GEBtype",type=str,help="Specify GEB type, options are 'long,short,m1,...,m8', if analyzing data from an ME0 detector write 'null'")
+
+# Optional arguments
+parent_parser.add_argument("-d", "--debug", action="store_true", help="print extra debugging information")
+parent_parser.add_argument("-o", "--outfilename", type=str, help="Specify Output Filename")
+parent_parser.add_argument("-t", "--type", type=str, dest="GEBtype", default="short", help="Specify GEB (long/short)")
+
+stripChanOrPinType = parent_parser.add_mutually_exclusive_group(required=False)
+stripChanOrPinType.add_argument("-c","--channels", action="store_true", help="Make plots vs channels instead of strips")
+stripChanOrPinType.add_argument("-p","--panasonic", action="store_true", dest="PanPin",help="Make plots vs Panasonic pins instead of strips")

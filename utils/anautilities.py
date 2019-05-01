@@ -16,6 +16,392 @@ Documentation
 
 from gempython.utils.gemlogger import printYellow, printRed
 
+def anaUltraThreshold(args,thrTree,outputDir=None):
+    """
+    Performs the threshold analysis on the input TTree thrTree.  The args namespace is expected to have the following attributes
+
+    channels - If true output plots are made vs. vfatCH
+    doNotSavePlots - If false saves output TObjects as a .png file to outputDir
+    extChanMapping - Name of externally supplied file that specifies the ROBstr:PanPin:vfatCH mapping
+    GEBtype - The detector type being analyzed
+    isVFAT2 - True (False) if data is coming from VFAT2(3)
+    PanPin - If true output plots are made vs. PanPin
+    pervfat - If true only 1D plots are made 
+    zscore - selection criterion to use in median absolute deviation outlier identifion algorithm
+    
+    Returns a tuple; for a description of elements of the tuple see the getHistos argument description below
+
+    Other arguments are:
+
+    thrTree - Instance of gemTreeStructure class from gempython.vfatqc.utils.treeStructure
+    outputDir - Directory where output plots are stored if args.savePlots is true
+    """
+
+    # Check attributes of input args
+    # If not present assign appropriate default arguments
+    if hasattr(args,'channels') is False:
+        args.channels = False
+    if hasattr(args,'debug') is False:
+        args.debug = False
+    if hasattr(args,'doNotSavePlots') is False:
+        args.doNotSavePlots = False
+    if hasattr(args,'extChanMapping') is False:
+        args.extChanMapping = None
+    if hasattr(args, 'fileScurveFitTree') is False:
+        args.fileScurveFitTree = None
+    if hasattr(args,'GEBtype') is False:
+        args.GEBtype = "short"
+        args.channels = True
+        args.PanPin = False
+    if hasattr(args,'isVFAT2') is False:
+        args.isVFAT2 = False
+    if hasattr(args,'PanPin') is False:
+        args.PanPin = False
+    if hasattr(args, 'pervfat') is False:
+        args.pervfat = False
+    if hasattr(args, 'outfilename') is False:
+        args.outfilename = "ThresholdPlots.root"
+    if hasattr(args,'zscore') is False:
+        args.zscore = 3.5
+        pass
+
+    # Build the channel to strip mapping from the text file
+    #from gempython.tools.hw_constants import gemVariants
+    import pkg_resources
+    MAPPING_PATH = pkg_resources.resource_filename('gempython.gemplotting', 'mapping/')
+
+    from gempython.utils.nesteddict import nesteddict as ndict
+    dict_vfatChanLUT = ndict()
+    GEBtype = args.GEBtype
+    if args.extChanMapping is not None:
+        dict_vfatChanLUT = getMapping(extChanMapping)
+    elif GEBtype == 'long':
+        dict_vfatChanLUT = getMapping(MAPPING_PATH+'/longChannelMap.txt')
+    elif GEBtype == 'short':
+        dict_vfatChanLUT = getMapping(MAPPING_PATH+'/shortChannelMap.txt')
+    else:
+        raise RuntimeError("No external mapping provided and GEB type was not recognized")
+
+    print 'Initializing Histograms'
+    if args.isVFAT2:
+        dacName = "VThreshold1"
+    else:
+        dacName = "CFG_THR_ARM_DAC"
+        pass
+    
+    from gempython.gemplotting.utils.anaInfo import mappingNames
+    if not (args.channels or args.PanPin):
+        stripChanOrPinName = ("ROBstr","Strip")
+        stripChanOrPinType = mappingNames[0]
+    elif args.channels:
+        stripChanOrPinType = mappingNames[2]
+        stripChanOrPinName = ("vfatCH","VFAT Channel")
+    elif args.PanPin:
+        stripChanOrPinName = ("PanPin","Panasonic Pin")
+        stripChanOrPinType = mappingNames[1]
+    else:
+        raise RuntimeError("anaUltraThreshold(): I did not understand this (channels, PanPin) combination: ({0},{1})".format(args.channels,args.PanPin))
+
+    import ROOT as r
+    r.TH1.SetDefaultSumw2(False)
+    r.gROOT.SetBatch(True)
+    THR_DAC_MAX = 255
+    dict_h2D_thrDAC = ndict()
+    dict_hMaxThrDAC = {}
+    dict_hMaxThrDAC_NoOutlier = {}
+    dict_chanMaxThrDAC = {}
+    for vfat in range(0,24):
+        dict_h2D_thrDAC[vfat] = r.TH2D(
+                'h_thrDAC_vs_ROBstr_VFAT{0}'.format(vfat),
+                'dict_h2D_thrDAC{0};{1};{2} [DAC units]'.format(vfat,stripChanOrPinName,dacName),
+                128,-0.5,127.5,THR_DAC_MAX+1,-0.5,THR_DAC_MAX+0.5)
+        dict_hMaxThrDAC[vfat] = r.TH1F(
+                'vfat{0}ChanMaxthrDAC'.format(vfat),
+                "vfat{0}".format(vfat),
+                THR_DAC_MAX+1,-0.5,THR_DAC_MAX+0.5)
+        dict_hMaxThrDAC_NoOutlier[vfat]= r.TH1F(
+                'vfat{0}ChanMaxthrDAC_NoOutlier'.format(vfat),
+                "vfat{0} - No Outliers".format(vfat),
+                THR_DAC_MAX+1,-0.5,THR_DAC_MAX+0.5)
+        dict_hMaxThrDAC_NoOutlier[vfat].SetLineColor(r.kRed)
+        pass
+
+    print 'Filling Histograms'
+    if args.isVFAT2:
+        dict_trimRange = dict((vfat,0) for vfat in range(0,24))
+    dict_vfatID = dict((vfat, 0) for vfat in range(0,24))
+    listOfBranches = thrTree.GetListOfBranches()
+    for event in thrTree:
+        if args.isVFAT2:
+            dict_trimRange[int(event.vfatN)] = int(event.dict_trimRange)
+
+        if not (dict_vfatID[event.vfatN] > 0):
+            if 'vfatID' in listOfBranches:
+                dict_vfatID[event.vfatN] = event.vfatID
+            else:
+                dict_vfatID[event.vfatN] = 0
+
+        stripPinOrChan = dict_vfatChanLUT[event.vfatN][stripChanOrPinType][event.vfatCH]
+        dict_h2D_thrDAC[event.vfatN].Fill(stripPinOrChan,event.vth1,event.Nhits)
+        pass
+    
+    # Make output TTree
+    from array import array
+    thrAnaTree = r.TTree('thrAnaTree','Tree Holding Analyzed Threshold Data')
+    mask = array( 'i', [ 0 ] )
+    thrAnaTree.Branch( 'mask', mask, 'mask/I' )
+    maskReason = array( 'i', [ 0 ] )
+    thrAnaTree.Branch( 'maskReason', maskReason, 'maskReason/I' )
+    vfatCH = array( 'i', [ 0 ] )
+    if args.isVFAT2:
+        trimRange = array( 'i', [0] )
+        thrAnaTree.Branch( 'trimRange', trimRange, 'trimRange/I')
+    thrAnaTree.Branch( 'vfatCH', vfatCH, 'vfatCH/I' )
+    vfatID = array( 'L', [0] )
+    thrAnaTree.Branch( 'vfatID', vfatID, 'vfatID/i' ) #Hex Chip ID of VFAT
+    vfatN = array( 'i', [ 0 ] )
+    thrAnaTree.Branch( 'vfatN', vfatN, 'vfatN/I' )
+    vthr = array( 'i', [ 0 ] )
+    thrAnaTree.Branch( 'vthr', vthr, 'vthr/I' )
+    
+    #Determine Hot Channels
+    print 'Determining hot channels'
+
+    from gempython.gemplotting.utils.anaInfo import MaskReason
+    import numpy as np
+    import root_numpy as rp #note need root_numpy-4.7.2 (may need to run 'pip install root_numpy --upgrade')
+    hot_channels = {}
+    for vfat in range(0,24):
+        #For each channel determine the maximum thresholds
+        dict_chanMaxThrDAC[vfat] = np.zeros((2,dict_h2D_thrDAC[vfat].GetNbinsX()))
+        for chan in range(0,dict_h2D_thrDAC[vfat].GetNbinsX()):
+            chanProj = dict_h2D_thrDAC[vfat].ProjectionY("projY",chan,chan,"")
+            for thresh in range(chanProj.GetMaximumBin(),THR_DAC_MAX+1):
+                if(chanProj.GetBinContent(thresh) == 0):
+                    dict_chanMaxThrDAC[vfat][0][chan]=chan
+                    dict_chanMaxThrDAC[vfat][1][chan]=(thresh-1)
+                    dict_hMaxThrDAC[vfat].Fill(thresh-1)
+                    break
+                pass
+            pass
+
+        #Determine Outliers (e.g. "hot" channels)
+        hot_channels[vfat] = [ False for chan in range(0,128) ]
+        chanOutliers = isOutlierMADOneSided(dict_chanMaxThrDAC[vfat][1,:], thresh=args.zscore)
+        for chan in range(0,len(chanOutliers)):
+            hot_channels[vfat][chan] = chanOutliers[chan]
+
+            if not chanOutliers[chan]:
+                dict_hMaxThrDAC_NoOutlier[vfat].Fill(dict_chanMaxThrDAC[vfat][1][chan])
+                pass
+            pass
+
+        #Fill TTree
+        for chan in range(0,128):
+            mask[0] = hot_channels[vfat][chan]
+            if hot_channels[vfat][chan]:
+                maskReason[0] = MaskReason.HotChannel
+            else:
+                maskReason[0] = 0x0
+            if args.isVFAT2:
+                trimRange[0] = dict_trimRange[vfat]
+            vfatCH[0] = chan
+            vfatID[0] = dict_vfatID[vfat]
+            vfatN[0] = vfat
+            vthr[0] = int(dict_chanMaxThrDAC[vfat][1][chan])
+            thrAnaTree.Fill()
+            pass
+        pass
+
+    #Save Output
+    if not args.doNotSavePlots:
+        if outputDir is None:
+            outputDir = getElogPath()
+
+        saveSummary(dictSummary=dict_h2D_thrDAC, name='%s/ThreshSummary.png'%outputDir, drawOpt="colz")
+
+        dict_h2D_thrDACProj = {}
+        for vfat in range(0,24):
+            dict_h2D_thrDACProj[vfat] = dict_h2D_thrDAC[vfat].ProjectionY()
+            pass
+        saveSummary(dictSummary=dict_h2D_thrDACProj, name='%s/VFATSummary.png'%outputDir, drawOpt="")
+
+        #Save thrDACMax Distributions Before/After Outlier Rejection
+        canv_vt1Max = make3x8Canvas(
+                name="canv_vt1Max",
+                initialContent=dict_hMaxThrDAC,
+                initialDrawOpt="hist",
+                secondaryContent=dict_hMaxThrDAC_NoOutlier,
+                secondaryDrawOpt="hist")
+        canv_vt1Max.SaveAs(outputDir+'/thrDACMaxSummary.png')
+
+    # Fetch trimDAC & chMask from scurveFitTree
+    import numpy as np
+    import root_numpy as rp
+    dict_vfatTrimMaskData = {}
+    if args.fileScurveFitTree is not None:
+        list_bNames = ["vfatN"]
+        if not (args.channels or args.PanPin):
+            list_bNames.append("ROBstr")
+            pass
+        elif args.channels:
+            list_bNames.append("vfatCH")
+            pass
+        elif args.PanPin:
+            list_bNames.append("panPin")
+            pass
+        list_bNames.append("mask")
+        list_bNames.append("maskReason")
+        list_bNames.append("trimDAC")
+        if not args.isVFAT2:
+            list_bNames.append("trimPolarity")
+
+        try:
+            array_VFATSCurveData = rp.root2array(args.fileScurveFitTree,treename="scurveFitTree",branches=list_bNames)
+            dict_vfatTrimMaskData = dict((idx,initVFATArray(array_VFATSCurveData.dtype)) for idx in np.unique(array_VFATSCurveData[list_bNames[0]]))
+            for dataPt in array_VFATSCurveData:
+                dict_vfatTrimMaskData[dataPt['vfatN']][dataPt[list_bNames[1]]]['mask'] =  dataPt['mask']
+                dict_vfatTrimMaskData[dataPt['vfatN']][dataPt[list_bNames[1]]]['maskReason'] =  dataPt['maskReason']
+                dict_vfatTrimMaskData[dataPt['vfatN']][dataPt[list_bNames[1]]]['trimDAC'] =  dataPt['trimDAC']
+                dict_vfatTrimMaskData[dataPt['vfatN']][dataPt[list_bNames[1]]]['trimPolarity'] =  dataPt['trimPolarity']
+                pass
+            pass
+        except IOError as err:
+            from gempython.utils.gemlogger import printRed
+            import os
+            printRed(err.message)
+            exit(os.EX_IOERR)
+            pass
+
+    #Subtracting off the hot channels, so the projection shows only usable ones.
+    list_bNames = ['vfatN','vfatCH','mask']
+    hot_channels = rp.tree2array(thrAnaTree, branches=list_bNames)
+    if not args.pervfat:
+        print("Subtracting off hot channels")
+        for vfat in range(0,24):
+            vfatChanArray = hot_channels[ hot_channels['vfatN'] == vfat ]
+            for chan in range(0,dict_h2D_thrDAC[vfat].GetNbinsX()):
+                isHotChan = vfatChanArray[ vfatChanArray['vfatCH'] == chan ]['mask']
+
+                if args.fileScurveFitTree is not None:
+                    isHotChan = (isHotChan or dict_vfatTrimMaskData[vfat][chan]['mask'])
+                    pass
+
+                if isHotChan:
+                    print('VFAT %i Strip %i is noisy'%(vfat,chan))
+                    for thresh in range(THR_DAC_MAX+1):
+                        dict_h2D_thrDAC[vfat].SetBinContent(chan, thresh, 0)
+                        pass
+                    pass
+                pass
+            pass
+        pass
+
+    #Make output TFile and write data to it
+    outFile = r.TFile("{0}/{1}".format(args.infilename[:-5],args.outfilename),"RECREATE")
+    outFile.cd()
+    thrAnaTree.Write()
+    dict_h2D_thrDACProjPruned = {}
+    for vfat in range(0,24):
+        thisDir = outFile.mkdir("VFAT{0}".format(vfat))
+        thisDir.cd()
+        dict_h2D_thrDAC[vfat].Write()
+        dict_hMaxThrDAC[vfat].Write()
+        dict_hMaxThrDAC_NoOutlier[vfat].Write()
+        dict_h2D_thrDACProjPruned[vfat] = dict_h2D_thrDAC[vfat].ProjectionY("h_thrDAC_VFAT%i"%vfat)
+        dict_h2D_thrDACProjPruned[vfat].Write()
+        pass
+
+    #Save output plots new hot channels subtracted off
+    if not args.doNotSavePlots:
+        saveSummary(dictSummary=dict_h2D_thrDAC, name='%s/ThreshPrunedSummary.png'%args.infilename[:-5], drawOpt="colz")
+        saveSummary(dictSummary=dict_h2D_thrDACProjPruned, name='%s/VFATPrunedSummary.png'%args.infilename[:-5], drawOpt="")
+
+    #Now determine what thrDAC to use for configuration.  The first threshold bin with no entries for now.
+    #Make a text file readable by TTree::ReadFile
+    print('Determining the thrDAC values for each VFAT')
+    vt1 = dict((vfat,0) for vfat in range(0,24))
+    for vfat in range(0,24):
+        proj = dict_h2D_thrDAC[vfat].ProjectionY()
+        proj.Draw()
+        for thresh in range(THR_DAC_MAX+1,0,-1):
+            if (proj.GetBinContent(thresh+1)) > 10.0:
+                if args.debug:
+                    print('vt1 for VFAT %i found'%vfat)
+                vt1[vfat]=(thresh+1)
+                break
+            pass
+        pass
+    outFile.Close()
+
+    txt_vfat = open(args.infilename[:-5]+"/vfatConfig.txt", 'w')
+    if args.isVFAT2:
+        txt_vfat.write("vfatN/I:vfatID/I:vt1/I:trimRange/I\n")
+        for vfat in range(0,24):
+            txt_vfat.write('%i\t%i\t%i\t%i\n'%(vfat,dict_vfatID[vfat],vt1[vfat],trimRange[vfat]))
+            pass
+    else:
+        txt_vfat.write("vfatN/I:vfatID/I:vt1/I\n")
+        for vfat in range(0,24):
+            txt_vfat.write('%i\t%i\t%i\n'%(vfat,dict_vfatID[vfat],vt1[vfat]))
+            pass
+    txt_vfat.close()
+
+    #Update channel registers configuration file
+    if args.fileScurveFitTree is not None:
+        confF = open(args.infilename[:-5]+'/chConfig_MasksUpdated.txt','w')
+        if args.isVFAT3:
+            confF.write('vfatN/I:vfatID/I:vfatCH/I:trimDAC/I:mask/I\n')
+            if args.debug:
+                print 'vfatN/I:vfatID/I:vfatCH/I:trimDAC/I:mask/I\n'
+            for vfat in range (0,24):
+                vfatChanArray = hot_channels[ hot_channels['vfatN'] == vfat ]
+                for chan in range (0, 128):
+                    isHotChan = vfatChanArray[ vfatChanArray['vfatCH'] == chan ]['mask']
+                    if args.debug:
+                        print('{0}\t{1}\t{2}\t{3}\t{4}\n'.format(
+                            vfat,
+                            dict_vfatID[vfat],
+                            chan,
+                            dict_vfatTrimMaskData[vfat][chan]['trimDAC'],
+                            int(isHotChan or dict_vfatTrimMaskData[vfat][chan]['mask'])))
+                    confF.write('{0}\t{1}\t{2}\t{3}\t{4}\n'.format(
+                        vfat,
+                        dict_vfatID[vfat],
+                        chan,
+                        dict_vfatTrimMaskData[vfat][chan]['trimDAC'],
+                        int(isHotChan or dict_vfatTrimMaskData[vfat][chan]['mask'])))
+        else:
+            confF.write('vfatN/I:vfatID/I:vfatCH/I:trimDAC/I:trimPolarity/I:mask/I:maskReason/I\n')
+            if args.debug:
+                print 'vfatN/I:vfatID/I:vfatCH/I:trimDAC/I:mask/I\n'
+            for vfat in range (0,24):
+                vfatChanArray = hot_channels[ hot_channels['vfatN'] == vfat ]
+                for chan in range(0,128):
+                    isHotChan = vfatChanArray[ vfatChanArray['vfatCH'] == chan ]['mask']
+                    if args.debug:
+                        print('%i\t%i\t%i\t%i\t%i\t%i\t%i\n'%(
+                            vfat,
+                            dict_vfatID[vfat],
+                            chan,
+                            dict_vfatTrimMaskData[vfat][chan]['trimDAC'],
+                            dict_vfatTrimMaskData[vfat][chan]['trimPolarity'],
+                            int(isHotChan or dict_vfatTrimMaskData[vfat][chan]['mask']),
+                            dict_vfatTrimMaskData[vfat][chan]['maskReason']))
+                    confF.write('%i\t%i\t%i\t%i\t%i\t%i\t%i\n'%(
+                        vfat,
+                        dict_vfatID[vfat],
+                        chan,
+                        dict_vfatTrimMaskData[vfat][chan]['trimDAC'],
+                        dict_vfatTrimMaskData[vfat][chan]['trimPolarity'],
+                        int(isHotChan or dict_vfatTrimMaskData[vfat][j]['mask']),
+                        dict_vfatTrimMaskData[vfat][chan]['maskReason']))
+
+        confF.close()
+        pass
+
+    return thrAnaTree
+
 def dacAnalysis(args, dacScanTree, chamber_config, scandate='noscandate'):
     """
     Analyzes DAC scan data to determine nominal bias current/voltage settings for a particular VFAT3 DAC.
@@ -62,13 +448,8 @@ def dacAnalysis(args, dacScanTree, chamber_config, scandate='noscandate'):
         arrayMask = np.logical_and(arrayMask, vfatArray['shelf'] == entry['shelf'])
         dict_nonzeroVFATs[ohKey] = np.unique(vfatArray[arrayMask]['vfatN'])
 
-    from gempython.utils.wrappers import envCheck
-    envCheck("DATA_PATH")
-    envCheck("ELOG_PATH")
-
-    import os
-    dataPath = os.getenv("DATA_PATH")
-    elogPath = os.getenv("ELOG_PATH") 
+    dataPath = getDataPath()
+    elogPath = getElogPath()
     
     from gempython.utils.wrappers import runCommand
     for entry in crateMap:
@@ -470,6 +851,13 @@ def get2DMapOfDetector(vfatChanLUT, obsData, mapName, zLabel):
 def getCyclicColor(idx):
     return 30+4*idx
 
+def getDataPath():
+    from gempython.utils.wrappers import envCheck
+    envCheck("DATA_PATH")
+
+    import os
+    return os.getenv("DATA_PATH") 
+
 def getDirByAnaType(anaType, cName, ztrim=4):
     from anaInfo import ana_config
     
@@ -483,9 +871,7 @@ def getDirByAnaType(anaType, cName, ztrim=4):
         pass
 
     # Check Paths
-    from ...utils.wrappers import envCheck
-    envCheck('DATA_PATH')
-    dataPath  = os.getenv('DATA_PATH')
+    dataPath = getDataPath()
 
     dirPath = ""
     if anaType == "dacScanV3":
@@ -516,6 +902,13 @@ def getDirByAnaType(anaType, cName, ztrim=4):
         dirPath = "%s/%s/trim/"%(dataPath,cName)
 
     return dirPath
+
+def getElogPath():
+    from gempython.utils.wrappers import envCheck
+    envCheck("ELOG_PATH")
+
+    import os
+    return os.getenv("ELOG_PATH") 
 
 def getEmptyPerVFATList(n_vfat=24):
     """
@@ -1370,14 +1763,9 @@ def sbitRateAnalysis(chamber_config, rateTree, cutOffRate=0.0, debug=False, outf
                           returned from "datetime.datetime.now().strftime("%Y.%m.%d.%H.%M")"
     """
 
-    # Check $ENV
-    from gempython.utils.wrappers import envCheck
-    envCheck("DATA_PATH")
-    envCheck("ELOG_PATH")
-
-    import os
-    dataPath = os.getenv("DATA_PATH")
-    elogPath = os.getenv("ELOG_PATH") 
+    # Get paths
+    dataPath = getDataPath()
+    elogPath = getElogPath()
 
     # Set default histogram behavior
     import ROOT as r
