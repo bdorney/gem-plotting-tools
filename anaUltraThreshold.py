@@ -29,7 +29,7 @@ if __name__ == '__main__':
     import ROOT as r
     inFile = r.TFile(filename+'.root')
     try:
-        args.func(args,inFile.thrTree)
+        args.func(args,inFile.thrTree,filename)
     except RuntimeError as err:
         from gempython.utils.gemlogger import printRed
         printRed(err.message)

@@ -90,7 +90,7 @@ def anaUltraThreshold(args,thrTree,outputDir=None):
         pass
     
     from gempython.gemplotting.utils.anaInfo import mappingNames
-    if not (args.channels or args.PanPin):
+    if ((not args.channels) and (not args.PanPin)):
         stripChanOrPinName = ("ROBstr","Strip")
         stripChanOrPinType = mappingNames[0]
     elif args.channels:
@@ -113,7 +113,7 @@ def anaUltraThreshold(args,thrTree,outputDir=None):
     for vfat in range(0,24):
         dict_h2D_thrDAC[vfat] = r.TH2D(
                 'h_thrDAC_vs_ROBstr_VFAT{0}'.format(vfat),
-                'dict_h2D_thrDAC{0};{1};{2} [DAC units]'.format(vfat,stripChanOrPinName,dacName),
+                'dict_h2D_thrDAC{0};{1};{2} [DAC units]'.format(vfat,stripChanOrPinName[1],dacName),
                 128,-0.5,127.5,THR_DAC_MAX+1,-0.5,THR_DAC_MAX+0.5)
         dict_hMaxThrDAC[vfat] = r.TH1F(
                 'vfat{0}ChanMaxthrDAC'.format(vfat),
@@ -153,6 +153,7 @@ def anaUltraThreshold(args,thrTree,outputDir=None):
     maskReason = array( 'i', [ 0 ] )
     thrAnaTree.Branch( 'maskReason', maskReason, 'maskReason/I' )
     vfatCH = array( 'i', [ 0 ] )
+    vfatCH[0] = -1
     if args.isVFAT2:
         trimRange = array( 'i', [0] )
         thrAnaTree.Branch( 'trimRange', trimRange, 'trimRange/I')
@@ -173,9 +174,9 @@ def anaUltraThreshold(args,thrTree,outputDir=None):
     hot_channels = {}
     for vfat in range(0,24):
         #For each channel determine the maximum thresholds
-        dict_chanMaxThrDAC[vfat] = np.zeros((2,dict_h2D_thrDAC[vfat].GetNbinsX()))
-        for chan in range(0,dict_h2D_thrDAC[vfat].GetNbinsX()):
-            chanProj = dict_h2D_thrDAC[vfat].ProjectionY("projY",chan,chan,"")
+        dict_chanMaxThrDAC[vfat] = -1 * np.ones((2,dict_h2D_thrDAC[vfat].GetNbinsX()))
+        for chan in range(0,128):
+            chanProj = dict_h2D_thrDAC[vfat].ProjectionY("projY",chan+1,chan+1,"")
             for thresh in range(chanProj.GetMaximumBin(),THR_DAC_MAX+1):
                 if(chanProj.GetBinContent(thresh) == 0):
                     dict_chanMaxThrDAC[vfat][0][chan]=chan
