@@ -1,0 +1,175 @@
+#!/usr/bin/env python
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description="Arguments to supply to plotTimeSeriesHV.py")
+
+    parser.add_argument("inputfile", type=str, help="TFile containing DCS output files")
+    parser.add_argument("row", type=int, help="Row of QC8 stand")
+    parser.add_argument("column", type=int, help="Column of QC8 stand")
+
+    qc8StandLayer = parser.add_mutually_exclusive_group(required=True)
+    qc8StandLayer.add_argument("-t","--top",action="store_true",help="Stand Layer is TOP")
+    qc8StandLayer.add_argument("-b","--bot",action="store_true",help="Stand Layer is BOT")
+   
+    parser.add_argument("-d","--debug",action="store_true",help="Prints additional debugging info")
+    parser.add_argument("-o","--outfilename", type=str, help="output name of TFile", default=None)
+    parser.add_argument("-u","--update", action="store_true", help="Instead of overwriting a pre-existing output file, adding this option will simply update that file")
+
+    # Parser the arguments
+    args = parser.parse_args()
+
+    # Load the input file
+    import ROOT as r
+    inF = r.TFile(args.inputfile,"READ")
+
+    # Set default histogram behavior
+    r.TH1.SetDefaultSumw2(False)
+    r.gROOT.SetBatch(True)
+    r.gStyle.SetOptStat(1111111)
+
+    # Check if file loaded okay
+    from gempython.utils.gemlogger import colors, printGreen, printRed, printYellow
+    import os
+    if not inF.IsOpen() or inF.IsZombie():
+        printRed("File {0} did not load properly, exiting".format(args.inputfile))
+        exit(os.EX_IOERR)
+        pass
+
+    # Determine qc8Layer
+    if args.top:
+        qc8Layer = "Top"
+    else:
+        qc8Layer = "Bot"
+
+    # Define known constants
+    knownLayers = [ "Top", "Bot" ]
+    knownElectrodes = []
+    for idx in range(1,4):
+        for layer in knownLayers:
+            knownElectrodes.append("G{0}{1}".format(idx,layer))
+            pass
+        pass
+    knownElectrodes.append("Drift")
+    knownObs = [ "Imon", "Vmon", "Status" ]
+
+    # Try to load all histograms
+    # ===================================================
+    cName = "Chamber{0}_{1}_{2}".format(args.row,args.column,qc8Layer)
+    from gempython.gemplotting.utils.anautilities import getCyclicColor
+    from gempython.utils.nesteddict import nesteddict as ndict
+    dict_dcsPlots = ndict() # ["Electrode"]["Obs"] = TObject
+    dict_legend = {} # [Obs] = TLegend
+    for idx,electrode in enumerate(knownElectrodes):
+        for obsData in knownObs:
+            dirName = "{0}/Channel{1}".format(cName,electrode)
+            plotName= "HV_{0}{1}_{2}_UTC_time".format(obsData,cName,electrode)
+            try:
+                dict_dcsPlots[electrode][obsData] = inF.Get("{0}/{1}".format(dirName,plotName))
+                if args.debug:
+                    print("Loaded plot: {0}/{1}".format(dirName,plotName))
+            except AttributeError as error:
+                printYellow("Distribution '{0}' not found in input file {1}. Skipping this distribution".format(
+                    plotName,
+                    args.inputfile))
+                continue
+            dict_dcsPlots[electrode][obsData].SetLineColor(getCyclicColor(idx))
+            dict_dcsPlots[electrode][obsData].SetMarkerColor(getCyclicColor(idx))
+            if obsData == "Vmon" or obsData == "Status":
+                dict_dcsPlots[electrode][obsData].GetYaxis().SetRangeUser(0,1e3)
+
+            if obsData in dict_legend.keys():
+                dict_legend[obsData].AddEntry(dict_dcsPlots[electrode][obsData],electrode,"LPE")
+            else:
+                dict_legend[obsData] = r.TLegend(0.7,0.75,0.9,0.9)
+                dict_legend[obsData].AddEntry(dict_dcsPlots[electrode][obsData],electrode,"LPE")
+            pass
+        pass
+
+    # Make output TCanvas objects - All Electrodes on one TCanvas per Observable
+    # ===================================================
+    dict_dcsCanvas = {} # ["Obs"] = TObject
+    for obsData in knownObs:
+        dict_dcsCanvas[obsData] = r.TCanvas("canv_{0}_{1}".format(obsData,cName),"{0}: {1}".format(cName,obsData),900,900)
+        pass
+
+    # Draw the observable onto the corresponding canvas
+    for obsData in knownObs:
+        drawOpt = None
+        dict_dcsCanvas[obsData].cd()
+        for electrode in knownElectrodes:
+            if drawOpt is None:
+                dict_dcsPlots[electrode][obsData].Draw("ALPE1")
+                drawOpt = "sameLPE1"
+            else:
+                dict_dcsPlots[electrode][obsData].Draw(drawOpt)
+                pass
+            pass
+        dict_legend[obsData].Draw("same")
+        pass
+
+    # Make output TCanvas objects - All observables on one TCanvas per Electrode
+    # ===================================================
+    dict_electrodeCanvas = {} # ["Electrode"] = TObject
+    for electrode in knownElectrodes:
+        dict_electrodeCanvas[electrode] = r.TCanvas("canv_{0}_{1}".format(electrode,cName),"{0}: {1}".format(cName,electrode),900,1800)
+        dict_electrodeCanvas[electrode].Divide(1,3)
+
+    # Draw the observable onto the corresponding canvas
+    for electrode in knownElectrodes:
+        for idx,obsData in enumerate(knownObs):
+            dict_electrodeCanvas[electrode].cd(idx+1)
+            dict_dcsPlots[electrode][obsData].Draw("ALPE1")
+            pass
+        pass
+
+    # Make output TCanvas Objects - All electrodes and all observables on one TCanvas
+    # ===================================================
+    canv_Summary = r.TCanvas("canv_Summary_{0}".format(cName),"{0}: Summary".format(cName), 900,1800)
+    canv_Summary.Divide(1,3)
+
+    # Draw the observable onto the corresponding canvas
+    for idx,obsData in enumerate(knownObs):
+        drawOpt = None
+        canv_Summary.cd(idx+1)
+        for electrode in knownElectrodes:
+            if drawOpt is None:
+                dict_dcsPlots[electrode][obsData].Draw("ALPE1")
+                drawOpt = "sameLPE1"
+            else:
+                dict_dcsPlots[electrode][obsData].Draw(drawOpt)
+                pass
+            pass
+        dict_legend[obsData].Draw("same")
+        pass
+
+    # Make an output TFile
+    # ===================================================
+    if args.update:
+        rootOpt = "UPDATE"
+    else:
+        rootOpt = "RECREATE"
+
+    from gempython.gemplotting.utils.anautilities import getElogPath
+    elogPath = getElogPath()
+    if args.outfilename is None:
+        outF = r.TFile("{0}/DCS_Plots.root".format(elogPath),rootOpt)
+    else:
+        outF = r.TFile(args.outfilename,rootOpt)
+        pass
+
+    thisDir = outF.mkdir(cName)
+    thisDir.cd()
+    canv_Summary.Write()
+    canv_Summary.SaveAs("{0}/{1}.png".format(elogPath,canv_Summary.GetName()))
+    for obsData in knownObs:
+        dict_dcsCanvas[obsData].Write()
+        dict_dcsCanvas[obsData].SaveAs("{0}/{1}.png".format(elogPath,dict_dcsCanvas[obsData].GetName()))
+        pass
+
+    for electrode in knownElectrodes:
+        dict_electrodeCanvas[electrode].Write()
+        dict_electrodeCanvas[electrode].SaveAs("{0}/{1}.png".format(elogPath,dict_electrodeCanvas[electrode].GetName()))
+        pass
+
+    print("Goodbye")
