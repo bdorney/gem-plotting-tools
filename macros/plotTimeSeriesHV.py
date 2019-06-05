@@ -1,5 +1,84 @@
 #!/usr/bin/env python
 
+r"""
+``plotTimeSeriesHV.py`` --- Plotting DCS Plots On Common TCanvas
+================================================================
+
+Synopsis
+--------
+
+**plotTimeSeriesHV.py** [*OPTIONS*] [INPUTFILE] [QC8_ROW] [QC8_COLUMN]
+
+Description
+-----------
+
+Plots HV plots made with :program:`StatusVmon904HV.py` onto several common TCanvas objects
+and creates images of those TCanvas for faster analysis.  Additionally these output
+TCanvas objects will be stored in an output TFile, which is by default:
+
+    $ELOG_PATH/DCS_PLOTS
+
+Arguments
+---------
+
+Mandatory arguments
+...................
+
+The following list shows the mandatory inputs that must be supplied to execute this script:
+
+.. program:: plotTimeSeriesHV.py
+
+.. option:: inputfile
+
+    Input file coming from StatusVmon904HV.py
+
+.. option:: row
+
+    Row of the QC8 stand, see `StandNomenclature.png <https://twiki.cern.ch/twiki/pub/CMS/GEMQC8WEEKLYPLAN/StandNomenclature.png>`_.
+
+.. option:: column
+    
+    Column of the QC8 stand, see `StandNomenclature.png <https://twiki.cern.ch/twiki/pub/CMS/GEMQC8WEEKLYPLAN/StandNomenclature.png>`_.
+
+.. option:: -t, --top
+
+    Specifies top layer, mutually exclusive with :token:`--bot`.
+
+.. option:: -b, --bot
+
+    Specifies bot layer, mutually exclusive with :token:`--top`.
+
+.. option:: -d, --debug
+
+    Prints additional debugging info
+
+.. option:: -o, --outfilename
+
+    Name of output TFile that will be created and store the TCanvas objects
+
+.. option:: -u, --update
+
+    The TFile specified by :token:`--outfilename` will be appended rather than overwritten
+
+Example
+-------
+
+Calling the following:
+
+.. code-block:: bash
+
+    plotTimeSeriesHV.py $BUILD_HOME/qc8/chanLoss/QC8_HV_monitor_UTC_start_2019-05-20_21-00-00_end_2019-05-29_23-59-59.root 3 2 -t
+
+will plot the HV plots for the 3/2/T layer of the cosmic stand and store them in `$ELOG_PATH/DCS_Plots.root`.
+You can add the bottom layer by calling:
+
+.. code-block:: bash
+
+    plotTimeSeriesHV.py $BUILD_HOME/qc8/chanLoss/QC8_HV_monitor_UTC_start_2019-05-20_21-00-00_end_2019-05-29_23-59-59.root 3 2 -b -u
+
+Now both layers will be in the same TFile.
+"""
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description="Arguments to supply to plotTimeSeriesHV.py")
