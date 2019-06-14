@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import cx_Oracle
 import ROOT
 import os
